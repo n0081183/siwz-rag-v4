@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Data — duże/transient/wrażliwe (nie wrzucamy do git)
+data/qdrant/*
+!data/qdrant/.gitkeep
+data/cortex_docs/**/*.html
+data/cortex_docs/.cortex_docs_state.json
+data/cortex_docs/.cortex_docs_state.json.tmp
+data/logs/*
+!data/logs/.gitkeep
+models/
+
+# Pliki wgrywane przez user (SIWZ-y, raporty)
+uploads/
+exports/
+
+# Streamlit cache
+.streamlit/secrets.toml
+
+# Pliki tymczasowe
+*.tmp
+*.bak

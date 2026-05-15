@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SIWZ-RAG v4 — RAG dla wymagań SIWZ/RFP względem Cortex</title>
+<meta name="description" content="Lokalne narzędzie RAG do oceny wymagań SIWZ/RFP względem dokumentacji Palo Alto Cortex. Wszystko offline.">
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --fg: #e6edf3;
+    --fg-dim: #8b949e;
+    --accent: #58a6ff;
+    --accent-2: #d29922;
+    --border: #30363d;
+    --code-bg: #1f2428;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.6;
+  }
+  .container { max-width: 920px; margin: 0 auto; padding: 2rem 1.5rem; }
+  header { text-align: center; padding: 4rem 1rem 2rem; }
+  header h1 { font-size: clamp(2rem, 5vw, 3.2rem); margin: 0 0 .5rem; }
+  header .tag { color: var(--accent); font-weight: 600; letter-spacing: .03em; }
+  header .lede { font-size: 1.15rem; color: var(--fg-dim); max-width: 640px; margin: 1rem auto 1.5rem; }
+  .cta { display: inline-flex; gap: .5rem; flex-wrap: wrap; justify-content: center; }
+  .btn {
+    display: inline-block;
+    padding: .7rem 1.4rem;
+    border-radius: 8px;
+    text-decoration: none;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    transition: all .15s;
+  }
+  .btn-primary { background: var(--accent); color: #0d1117; border-color: var(--accent); }
+  .btn-primary:hover { filter: brightness(1.15); }
+  .btn-secondary { color: var(--fg); background: var(--bg-card); }
+  .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+  section { margin-top: 3rem; }
+  section h2 { font-size: 1.7rem; border-bottom: 1px solid var(--border); padding-bottom: .5rem; }
+
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-top: 1.5rem; }
+  .feature {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.1rem 1.2rem;
+  }
+  .feature .icon { font-size: 1.7rem; }
+  .feature h3 { margin: .4rem 0 .3rem; font-size: 1.1rem; }
+  .feature p { color: var(--fg-dim); font-size: .96rem; margin: 0; }
+
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .92rem;
+  }
+  pre code { color: var(--fg); }
+  code:not(pre code) {
+    background: var(--code-bg);
+    padding: .15rem .4rem;
+    border-radius: 4px;
+    font-size: .9em;
+    color: var(--accent);
+  }
+
+  .stack { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .7rem; margin-top: 1rem; }
+  .stack-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: .7rem 1rem;
+    font-size: .95rem;
+  }
+  .stack-item .role { color: var(--accent); font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  th, td { padding: .55rem .8rem; border-bottom: 1px solid var(--border); text-align: left; }
+  th { color: var(--accent); font-weight: 600; }
+
+  footer { margin-top: 4rem; padding: 2rem 1rem; text-align: center; color: var(--fg-dim); border-top: 1px solid var(--border); }
+  footer a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="tag">SIWZ-RAG&nbsp;v4</div>
+    <h1>RAG do oceny wymagań SIWZ/RFP względem dokumentacji Cortex</h1>
+    <p class="lede">
+      Wklejasz wymaganie z polskiego przetargu (SIWZ/SWZ/OPZ) — aplikacja przeszukuje
+      lokalny mirror dokumentacji Palo Alto Cortex i wydaje werdykt z uzasadnieniem,
+      z linkami do źródeł w oficjalnym portalu. <strong>Wszystko działa lokalnie.</strong>
+    </p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/n0081183/siwz-rag-v4">⭐ Repo na GitHub</a>
+      <a class="btn btn-secondary" href="https://github.com/n0081183/siwz-rag-v4/blob/main/INSTALL.md">📖 Instalacja</a>
+      <a class="btn btn-secondary" href="https://github.com/n0081183/siwz-rag-v4/releases">📦 Releases</a>
+    </div>
+  </div>
+</header>
+
+<div class="container">
+
+<section>
+<h2>Co potrafi</h2>
+<div class="features">
+  <div class="feature"><div class="icon">🔍</div><h3>Weryfikacja wymagań</h3>
+    <p>Pojedyncze wymaganie SIWZ → ocena ✅/⚠️/❌ z chain-of-thought.</p></div>
+  <div class="feature"><div class="icon">✍️</div><h3>Generowanie wymagań</h3>
+    <p>Z tematu → N wymagań technologicznie neutralnych. Opcjonalna anonimizacja.</p></div>
+  <div class="feature"><div class="icon">📄</div><h3>Analiza całego SIWZ</h3>
+    <p>PDF/DOCX → lista wymagań → ocena każdego → raport Markdown.</p></div>
+  <div class="feature"><div class="icon">🔄</div><h3>Auto-sync z portalem</h3>
+    <p>Incremental update z oficjalnego API — tylko delty.</p></div>
+  <div class="feature"><div class="icon">🛡️</div><h3>100% lokalnie</h3>
+    <p>Żaden tekst SIWZ nie opuszcza Twojego laptopa. Wszystko offline po sync.</p></div>
+  <div class="feature"><div class="icon">🇵🇱🇬🇧</div><h3>Dwujęzycznie</h3>
+    <p>UI i odpowiedzi w PL lub EN. Słownik terminów SIWZ ↔ Cortex.</p></div>
+</div>
+</section>
+
+<section>
+<h2>Quickstart (5 minut)</h2>
+<pre><code># Wymagania: Python 3.11/3.12, Ollama, 16 GB RAM
+git clone https://github.com/n0081183/siwz-rag-v4.git
+cd siwz-rag-v4
+bash scripts/setup.sh         # venv + paczki + modele Ollama
+source .venv/bin/activate
+siwz-rag doctor               # health-check
+siwz-rag sync                 # pierwsza sync ~30-60 min
+siwz-rag serve                # UI: http://localhost:8501
+</code></pre>
+</section>
+
+<section>
+<h2>Stack technologiczny</h2>
+<div class="stack">
+  <div class="stack-item"><div class="role">UI</div>Streamlit 1.40</div>
+  <div class="stack-item"><div class="role">LLM</div>Qwen 3.5 9B (Ollama)</div>
+  <div class="stack-item"><div class="role">Embedding</div>BAAI/bge-m3</div>
+  <div class="stack-item"><div class="role">Reranker</div>bge-reranker-v2-m3</div>
+  <div class="stack-item"><div class="role">Vector DB</div>Qdrant embedded</div>
+  <div class="stack-item"><div class="role">Doc sync</div>cortex-docs-sync</div>
+  <div class="stack-item"><div class="role">PDF/DOCX</div>Docling 2.14</div>
+  <div class="stack-item"><div class="role">Język</div>Python 3.11/3.12</div>
+</div>
+</section>
+
+<section>
+<h2>Co nowego w v4 vs v3</h2>
+<table>
+<tr><th>Obszar</th><th>v3</th><th>v4</th></tr>
+<tr><td>Źródło dokumentacji</td><td>ręczne PDF-y</td><td>auto-sync z portalu (incremental)</td></tr>
+<tr><td>Chunking</td><td>RecursiveCharacterTextSplitter</td><td>HTML-aware z atomowymi tabelami</td></tr>
+<tr><td>Reranker</td><td>—</td><td>bge-reranker-v2-m3 (top-30 → top-8)</td></tr>
+<tr><td>LLM</td><td>Qwen 3 8B</td><td>Qwen 3.5 9B + thinking mode</td></tr>
+<tr><td>Deployment</td><td>manualnie</td><td><code>siwz-rag</code> CLI + <code>setup.sh</code></td></tr>
+<tr><td>UI</td><td>3 tryby</td><td>4 tryby (+ Sync &amp; Index)</td></tr>
+</table>
+</section>
+
+<section>
+<h2>Wymagania sprzętowe</h2>
+<table>
+<tr><th>Komponent</th><th>Minimum</th><th>Zalecane</th></tr>
+<tr><td>RAM</td><td>16 GB</td><td>18 GB+</td></tr>
+<tr><td>Dysk</td><td>15 GB</td><td>25 GB</td></tr>
+<tr><td>CPU/GPU</td><td>x86_64 lub Apple Silicon</td><td>Apple M-series z MPS</td></tr>
+<tr><td>OS</td><td>macOS 13+, Ubuntu 22.04+</td><td>macOS Sonoma+</td></tr>
+<tr><td>Python</td><td>3.11 lub 3.12</td><td>3.12</td></tr>
+</table>
+</section>
+
+</div>
+
+<footer>
+<p>
+  Made with ❤️ for SIWZ procurement teams.
+  <br>
+  <a href="https://github.com/n0081183/siwz-rag-v4">GitHub</a> ·
+  <a href="https://github.com/n0081183/siwz-rag-v4/blob/main/LICENSE">MIT License</a>
+  <br><br>
+  <small>Cortex® i nazwy produktów Palo Alto Networks są zastrzeżonymi znakami towarowymi ich właścicieli.
+  Ten projekt nie jest powiązany ani sponsorowany przez Palo Alto Networks.</small>
+</p>
+</footer>
+
+</body>
+</html>

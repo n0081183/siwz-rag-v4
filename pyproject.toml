@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "siwz-rag"
+version = "4.0.0"
+description = "SIWZ-RAG v4 — RAG dla wymagań SIWZ/RFP względem dokumentacji Cortex"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+
+# ── Dependencje produkcyjne ────────────────────────────────────────────────
+# Wszystkie wersje zamrożone celowo. v3.x trzymał się drift w libach embeddingu,
+# który psuł ingest po update bibliotek transitivnych — v4 to lockuje.
+dependencies = [
+    # UI
+    "streamlit==1.40.1",
+
+    # Ingest: HTML parsing + struktura
+    "beautifulsoup4==4.12.3",
+    "lxml==5.3.0",
+
+    # Sync: nasze własne narzędzie (instalowane editable lokalnie, patrz INSTALL.md)
+    "cortex-docs-sync==0.1.0",
+
+    # Embedding: BGE-M3 dense + sparse w jednym przebiegu
+    "FlagEmbedding==1.3.4",
+    "torch==2.5.1",
+    "sentence-transformers==3.3.1",
+
+    # Vector store
+    "qdrant-client==1.12.1",
+
+    # LLM
+    "requests==2.32.3",
+
+    # Parser dokumentów wgranych przez użytkownika (PDF/DOCX) — tylko upload SIWZ
+    "docling==2.14.0",
+
+    # Tokenizer (do raportów statystycznych długości chunków, nie do embedding)
+    "tiktoken==0.8.0",
+
+    # Pomocnicze
+    "pyyaml==6.0.2",
+    "numpy==1.26.4",  # 1.x dla zgodności z torch 2.5.1
+    "python-slugify==8.0.4",
+    "rich==13.9.4",  # tylko CLI
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-cov==6.0.0",
+    "ruff==0.8.4",
+]
+
+[project.scripts]
+siwz-rag = "siwz_rag.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["siwz_rag*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B"]
+ignore = ["E501"]  # line length — many prompts są długie celowo
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,107 @@
+# SIWZ-RAG v4 — konfiguracja domyślna.
+# Wszystkie ścieżki są względne do katalogu repozytorium (gdzie leży pyproject.toml).
+
+app:
+  name: "SIWZ-RAG v4"
+  default_language: "pl"          # pl | en
+  anonymize_default: true
+  # Produkty wybieralne w UI — muszą zgadzać się z DEFAULT_PRODUCT_DIR_MAP w sync
+  products:
+    - "XDR"
+    - "XSIAM"
+    - "XSOAR"
+    - "XPANSE"
+  max_upload_size_mb: 40
+
+# ── Synchronizacja dokumentacji ─────────────────────────────────────────────
+sync:
+  output_dir: "data/cortex_docs"
+  state_file: "data/cortex_docs/.cortex_docs_state.json"
+  rate_limit_rps: 1.5             # Polite vendor portal; bezpiecznie do 3
+  user_agent: "siwz-rag/4.0 (+local)"
+  # Auto-reindex po sync: gdy sync wykryje zmiany, indexer dostaje listę zmienionych
+  # publikacji i odświeża TYLKO ich chunki w Qdrant (nie cały korpus).
+  auto_reindex_after_sync: true
+  # Automatyczna sync z UI — przy starcie aplikacji sprawdzane jest, czy minęło
+  # więcej niż `auto_sync_interval_days` od ostatniego sync. Jeśli tak, UI pokaże
+  # banner z propozycją sync. Wartość 0 wyłącza auto-prompt.
+  auto_sync_interval_days: 7
+
+# ── Ingest / chunking ───────────────────────────────────────────────────────
+ingest:
+  # Target rozmiar chunka tekstowego (znaki). Tabele są ATOMOWE — nigdy nie dzielone.
+  target_chars: 1800
+  # Minimalna długość chunka — krótsze są mergowane z poprzednim
+  min_chars: 200
+  # Max long: ostry limit dla bardzo długich tabel (głębokie matrices kompatybilności)
+  hard_max_chars: 7000
+  # Czy załączać heading_path jako prefix do tekstu chunka (boost retrieval)
+  inject_heading_path: true
+  # Batch size dla embeddera (M3 Pro: 8-16 to sweet spot; 32 może OOM przy długich chunkach)
+  embed_batch_size: 12
+
+# ── Embedding ──────────────────────────────────────────────────────────────
+embedding:
+  provider: "bge-m3"
+  # FlagEmbedding ściągnie z HF Hub przy pierwszym uruchomieniu (lub lokalnie z model_path)
+  model_id: "BAAI/bge-m3"
+  model_path: "models/bge-m3"     # opcjonalny lokalny cache; jeśli nie istnieje, użyje HF
+  dimensions: 1024
+  max_length: 4096                # wystarczy dla naszych chunków (target 1800 chars)
+  use_fp16: true                  # MPS-friendly
+  use_sparse: true                # hybrid retrieval (BM25-like z modelu)
+
+# ── Reranker ───────────────────────────────────────────────────────────────
+reranker:
+  enabled: true
+  model_id: "BAAI/bge-reranker-v2-m3"
+  model_path: "models/bge-reranker-v2-m3"
+  # Po retrievalu zwracamy top_k_initial z Qdrant, reranker tnie do top_k_final
+  top_k_initial: 30               # candidate pool — wyciągamy szeroko
+  top_k_final: 8                  # finalne chunki idące do LLM
+  batch_size: 16
+  use_fp16: true
+
+# ── Vector store ───────────────────────────────────────────────────────────
+vectorstore:
+  provider: "qdrant"
+  mode: "embedded"                # embedded | http
+  # embedded: Qdrant trzyma dane w katalogu lokalnym (bez Dockera)
+  storage_path: "data/qdrant"
+  # http (dla zaawansowanych): jeśli ktoś chce uruchomić Qdrant w Dockerze
+  host: "localhost"
+  port: 6333
+  collection: "cortex_docs_v4"
+  search:
+    fusion: "rrf"                 # Reciprocal Rank Fusion dla dense+sparse
+    prefetch_limit: 40            # surowy budżet per gałąź przed RRF (>= top_k_initial)
+
+# ── LLM ────────────────────────────────────────────────────────────────────
+llm:
+  provider: "ollama"
+  base_url: "http://localhost:11434"
+  # Qwen 3.5 9B (dense) — ostry pick dla 18GB Maca. Q4_K_M waży ~6.6GB.
+  # Ma "thinking mode" — krytyczne dla chain-of-thought.
+  # Patrz INSTALL.md sekcja "Wybór modelu" jeśli chcesz przełączyć.
+  model: "qwen3.5:9b"
+  # Drugi model — szybki, do ekstrakcji wymagań w batch (mały model = szybsze)
+  extract_model: "qwen3.5:9b"     # możesz zmienić na "qwen3.5:4b" jeśli masz < 16GB
+  temperature: 0.1
+  num_ctx: 16384
+  timeout: 600
+  stream: true
+  # Wyłącz thinking mode w niektórych trybach (oszczędność czasu w batch)
+  # /think włącza chain-of-thought, /no_think wyłącza
+  thinking_in_verify: true        # CoT pomaga przy multi-OS req
+  thinking_in_extract: false      # ekstrakcja wymagań nie potrzebuje CoT
+
+# ── Logowanie ──────────────────────────────────────────────────────────────
+logging:
+  dir: "data/logs"
+  app_log: "app.log"
+  ingest_log: "ingest.log"
+  sync_log: "sync.log"
+  stats: "stats.jsonl"
+  max_bytes: 10485760
+  backup_count: 5
+  level: "INFO"
