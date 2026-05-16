@@ -142,7 +142,104 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         _err(f"Config: {exc}")
         return 1
 
-    # 4. Ollama
+    # 4. Docker + Qdrant (jeśli mode=docker)
+    if cfg.vectorstore.mode == "docker":
+        from siwz_rag.qdrant_runtime import (
+            check_docker,
+            container_status,
+            ensure_running,
+            image_present,
+            pull_image,
+        )
+
+        docker = check_docker()
+        if not docker.installed:
+            _err(f"Docker: nie zainstalowany — {docker.error}")
+            _info("  Pobierz: https://docker.com/products/docker-desktop/ lub https://orbstack.dev")
+            exit_code = 1
+        elif not docker.daemon_running:
+            _err(f"Docker daemon: nie działa — {docker.error}")
+            _info("  Uruchom aplikację Docker Desktop / OrbStack lub: colima start")
+            exit_code = 1
+        else:
+            _ok(f"Docker daemon działa (server: {docker.version})")
+
+            if not image_present(cfg.vectorstore.docker_image):
+                _warn(f"Obraz {cfg.vectorstore.docker_image} nie jest pobrany")
+                if args.fix:
+                    _info(f"Pobieram obraz (może potrwać kilka minut, ~100 MB)…")
+                    ok, msg = pull_image(cfg.vectorstore.docker_image, verbose=True)
+                    if ok:
+                        _ok("Obraz pobrany")
+                    else:
+                        _err(f"docker pull failed: {msg}")
+                        exit_code = 1
+                else:
+                    _info(f"  Uruchom: docker pull {cfg.vectorstore.docker_image}")
+                    _info("  Lub: siwz-rag doctor --fix")
+                    exit_code = max(exit_code, 2)
+            else:
+                _ok(f"Obraz {cfg.vectorstore.docker_image} dostępny")
+
+            # Kontener
+            cs = container_status(cfg.vectorstore.docker_container)
+            if not cs.exists:
+                _warn(f"Kontener {cfg.vectorstore.docker_container} nie istnieje")
+                if args.fix:
+                    _info("Tworzę kontener …")
+                    ok, msg = ensure_running(
+                        name=cfg.vectorstore.docker_container,
+                        volume=cfg.vectorstore.docker_volume,
+                        image=cfg.vectorstore.docker_image,
+                        port=cfg.vectorstore.port,
+                    )
+                    if ok:
+                        _ok(msg)
+                    else:
+                        _err(msg)
+                        exit_code = 1
+                else:
+                    _info("  Uruchom: siwz-rag doctor --fix")
+                    exit_code = max(exit_code, 2)
+            elif not cs.running:
+                _warn(f"Kontener {cfg.vectorstore.docker_container} nie działa")
+                if args.fix:
+                    ok, msg = ensure_running(
+                        name=cfg.vectorstore.docker_container,
+                        volume=cfg.vectorstore.docker_volume,
+                        image=cfg.vectorstore.docker_image,
+                        port=cfg.vectorstore.port,
+                    )
+                    if ok:
+                        _ok(msg)
+                    else:
+                        _err(msg)
+                        exit_code = 1
+                else:
+                    _info(f"  Uruchom: docker start {cfg.vectorstore.docker_container}")
+                    exit_code = max(exit_code, 2)
+            elif not cs.health_ok:
+                _warn(f"Kontener działa ale nie odpowiada na /healthz (port {cs.port})")
+                exit_code = max(exit_code, 2)
+            else:
+                _ok(
+                    f"Qdrant kontener gotowy (http://localhost:{cs.port} — "
+                    f"WebUI: http://localhost:{cs.port}/dashboard)"
+                )
+    elif cfg.vectorstore.mode == "embedded":
+        _warn(
+            "Vectorstore w trybie EMBEDDED — limit ~20k punktów. "
+            "Dla pełnej dokumentacji Cortex zalecane mode='docker' w config.yaml."
+        )
+    elif cfg.vectorstore.mode == "http":
+        from siwz_rag.qdrant_runtime import _http_health_ok
+        if _http_health_ok(cfg.vectorstore.port):
+            _ok(f"Qdrant (http): {cfg.vectorstore.host}:{cfg.vectorstore.port}")
+        else:
+            _err(f"Qdrant (http) nie odpowiada na {cfg.vectorstore.host}:{cfg.vectorstore.port}")
+            exit_code = 1
+
+    # 5. Ollama
     from siwz_rag.rag.llm import check_ollama, model_available
 
     alive, available = check_ollama(cfg.llm)
@@ -157,20 +254,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         if model_available(cfg.llm.model, available):
             _ok(f"Model główny: `{cfg.llm.model}` — pobrany")
         else:
-            _warn(
-                f"Model `{cfg.llm.model}` nie pobrany. Wykonaj: `ollama pull {cfg.llm.model}`"
-            )
+            _warn(f"Model `{cfg.llm.model}` nie pobrany. Wykonaj: `ollama pull {cfg.llm.model}`")
             exit_code = max(exit_code, 2)
-        if cfg.llm.extract_model != cfg.llm.model:
-            if model_available(cfg.llm.extract_model, available):
-                _ok(f"Model extract: `{cfg.llm.extract_model}` — pobrany")
-            else:
-                _warn(f"Model extract `{cfg.llm.extract_model}` nie pobrany.")
 
-    # 5. cortex-docs-sync
+    # 6. cortex-docs-sync
     try:
         import cortex_docs_sync  # noqa: F401
-
         _ok(f"cortex-docs-sync: {cortex_docs_sync.__version__}")
     except ImportError:
         _err(
@@ -179,16 +268,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         )
         exit_code = 1
 
-    # 6. Qdrant client (embedded mode wystarczy że biblioteka jest)
-    try:
-        import qdrant_client  # noqa: F401
-
-        _ok(f"qdrant-client: zainstalowany ({qdrant_client.__version__ if hasattr(qdrant_client, '__version__') else 'ok'})")
-    except ImportError:
-        _err("qdrant-client nie zainstalowany — `pip install -e .`")
-        exit_code = 1
-
-    # 7. Status indexu
+    # 7. Status indexu (gdy Qdrant żyje)
     try:
         from siwz_rag.sync.manager import SyncManager
 
@@ -210,28 +290,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 _ok(f"Ostatnia sync: {days:.0f} dni temu")
         if status["chunks_in_qdrant"] == 0:
             _warn(
-                "Index Qdrant jest pusty. Wykonaj `siwz-rag sync` żeby pobrać i zaindeksować dokumentację."
+                "Index Qdrant jest pusty. Wykonaj `siwz-rag sync` lub `siwz-rag import`."
             )
             exit_code = max(exit_code, 2)
     except Exception as exc:  # noqa: BLE001
         _warn(f"Nie udało się odczytać statusu indexu: {exc}")
 
-    # 8. Smoke imports — czy wszystkie moduły siwz_rag się importują
+    # 8. Smoke imports
     failed_imports: list[str] = []
     for modname in (
-        "siwz_rag.config",
-        "siwz_rag.i18n",
-        "siwz_rag.anonymizer",
-        "siwz_rag.metadata",
-        "siwz_rag.retriever",
-        "siwz_rag.batch_processor",
-        "siwz_rag.ingest.chunker",
-        "siwz_rag.rag.embedder",
-        "siwz_rag.rag.reranker",
-        "siwz_rag.rag.vectorstore",
-        "siwz_rag.rag.llm",
-        "siwz_rag.rag.prompts",
-        "siwz_rag.sync.manager",
+        "siwz_rag.config", "siwz_rag.i18n", "siwz_rag.anonymizer", "siwz_rag.metadata",
+        "siwz_rag.retriever", "siwz_rag.batch_processor", "siwz_rag.import_docs",
+        "siwz_rag.ingest.chunker", "siwz_rag.rag.embedder", "siwz_rag.rag.reranker",
+        "siwz_rag.rag.vectorstore", "siwz_rag.rag.llm", "siwz_rag.rag.prompts",
+        "siwz_rag.sync.manager", "siwz_rag.qdrant_runtime", "siwz_rag.bootstrap",
     ):
         try:
             __import__(modname)
@@ -257,14 +329,30 @@ def cmd_sync(args: argparse.Namespace) -> int:
     setup_environment()
     cfg = load_config()
 
+    from siwz_rag.bootstrap import ensure_runtime_ready
     from siwz_rag.logger import get_logger, write_stat
     from siwz_rag.sync.manager import SyncManager
 
     log = get_logger("sync", cfg.logging)
     log.info(
-        "CLI sync: full=%s dry=%s max=%s skip_reindex=%s",
-        args.full, args.dry_run, args.max, args.skip_reindex,
+        "CLI sync: full=%s dry=%s max=%s skip_reindex=%s rate_limit=%s",
+        args.full, args.dry_run, args.max, args.skip_reindex, args.rate_limit,
     )
+
+    # Bootstrap Qdrant (Docker container) jeśli mode=docker
+    if not args.dry_run:
+        ok, msg, cfg = ensure_runtime_ready(cfg)
+        if not ok:
+            _err(msg)
+            return 1
+        _ok(msg)
+
+    # Override rate-limit z CLI jeśli podany
+    if args.rate_limit is not None and args.rate_limit > 0:
+        from dataclasses import replace
+        new_sync = replace(cfg.sync, rate_limit_rps=args.rate_limit)
+        cfg = replace(cfg, sync=new_sync)
+        _info(f"Rate limit nadpisany przez CLI: {args.rate_limit} req/s")
 
     def _progress(i: int, total: int, title: str) -> None:
         _info(f"[{i}/{total}] {title}")
@@ -325,11 +413,18 @@ def cmd_index(args: argparse.Namespace) -> int:
     setup_environment()
     cfg = load_config()
 
+    from siwz_rag.bootstrap import ensure_runtime_ready
     from siwz_rag.logger import get_logger, write_stat
     from siwz_rag.sync.manager import SyncManager
 
     log = get_logger("ingest", cfg.logging)
     log.info("CLI index (full local reindex)")
+
+    ok, msg, cfg = ensure_runtime_ready(cfg)
+    if not ok:
+        _err(msg)
+        return 1
+    _ok(msg)
 
     def _reindex_progress(map_id: str, done: int, total: int) -> None:
         if total > 0 and (done == total or done % max(1, total // 4) == 0):
@@ -351,6 +446,142 @@ def cmd_index(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── import ──────────────────────────────────────────────────────────────────
+
+
+def cmd_import(args: argparse.Namespace) -> int:
+    """Zaimportuj lokalną dokumentację Cortex (HTML z cortex-docs-sync) zamiast pobierać z portalu."""
+    setup_environment()
+    cfg = load_config()
+
+    from siwz_rag.bootstrap import ensure_runtime_ready
+    from siwz_rag.import_docs import (
+        discover_likely_source_dirs,
+        import_local_documentation,
+        looks_like_cortex_docs_sync_dir,
+    )
+    from siwz_rag.logger import get_logger, write_stat
+
+    log = get_logger("ingest", cfg.logging)
+
+    # Bootstrap Qdrant chyba że --no-reindex (wtedy nie potrzebujemy bazy)
+    if not args.no_reindex:
+        ok, msg, cfg = ensure_runtime_ready(cfg)
+        if not ok:
+            _err(msg)
+            return 1
+        _ok(msg)
+
+    # ── Wyznacz źródło ──────────────────────────────────────────────────
+    source: Optional[Path] = None
+    if args.source:
+        source = Path(args.source).expanduser().resolve()
+        valid, reason = looks_like_cortex_docs_sync_dir(source)
+        if not valid:
+            _err(reason)
+            return 1
+        _ok(f"Źródło: {source} — {reason}")
+    else:
+        candidates = discover_likely_source_dirs()
+        if not candidates:
+            _err(
+                "Nie wykryto lokalnych źródeł cortex-docs-sync. "
+                "Wskaż jawnie: `siwz-rag import --source /ścieżka/do/cortex_docs`"
+            )
+            return 1
+        if len(candidates) == 1:
+            source = candidates[0]
+            _info(f"Znaleziono źródło: {source}")
+        else:
+            _info("Wykryto wiele kandydatów:")
+            for i, c in enumerate(candidates, 1):
+                _info(f"  [{i}] {c}")
+            try:
+                choice = input(f"Wybierz numer [1-{len(candidates)}] lub Enter dla [1]: ").strip()
+            except EOFError:
+                choice = "1"
+            idx = int(choice) - 1 if choice.isdigit() else 0
+            if not 0 <= idx < len(candidates):
+                _err("Niepoprawny wybór.")
+                return 1
+            source = candidates[idx]
+
+    # ── Walidacja końcowa ──────────────────────────────────────────────
+    valid, reason = looks_like_cortex_docs_sync_dir(source)
+    if not valid:
+        _err(reason)
+        return 1
+
+    # ── Potwierdzenie ───────────────────────────────────────────────────
+    if not args.yes:
+        target = cfg.sync.output_path
+        _info(f"Skopiuję pliki HTML z:  {source}")
+        _info(f"                  do:  {target}")
+        if args.no_reindex:
+            _info("Reindex Qdrant: POMIJANY (--no-reindex)")
+        else:
+            _info("Reindex Qdrant: TAK (chunking + embedding ~10-30 min)")
+        try:
+            confirm = input("Kontynuować? [T/n]: ").strip().lower()
+        except EOFError:
+            confirm = ""
+        if confirm and confirm not in ("t", "tak", "y", "yes"):
+            _info("Anulowane.")
+            return 0
+
+    # ── Wykonanie ───────────────────────────────────────────────────────
+    def _progress(stage: str, done: int, total: int) -> None:
+        if total <= 0:
+            return
+        if stage == "copy":
+            _info(f"  kopiowanie: {done}/{total}")
+        elif stage == "state":
+            _info("  zapisano state-file (incremental sync gotowy)")
+        elif stage == "reindex":
+            if done == total or done % max(1, total // 5) == 0:
+                _info(f"  reindex: {done}/{total} chunków")
+
+    log.info("CLI import from %s (no_reindex=%s)", source, args.no_reindex)
+
+    try:
+        result = import_local_documentation(
+            source,
+            cfg=cfg,
+            copy=True,
+            rebuild_state=True,
+            reindex=not args.no_reindex,
+            progress=_progress,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.exception("import failed")
+        _err(f"Import nieudany: {exc}")
+        return 1
+
+    _print("")
+    if result.errors:
+        for e in result.errors:
+            _warn(e)
+
+    _ok(
+        f"Skopiowano: {result.files_copied}/{result.files_found} plików, "
+        f"pominięto: {result.files_skipped}"
+    )
+    if result.state_reconstructed:
+        _ok(f"State-file zrekonstruowany: {result.state_entries} publikacji")
+    if not args.no_reindex:
+        _ok(
+            f"Reindex: {result.reindexed_publications} publikacji, "
+            f"{result.new_chunks_indexed} chunków w {result.reindex_elapsed_seconds:.1f}s"
+        )
+        _info(
+            "Następny krok: `siwz-rag serve` lub `siwz-rag sync` "
+            "(sync pobierze TYLKO zmienione od momentu eksportu HTML-i)"
+        )
+
+    write_stat(cfg.logging, {"event": "cli.import", **result.as_dict()})
+    return 0 if not result.errors else 2
+
+
 # ── status ──────────────────────────────────────────────────────────────────
 
 
@@ -358,15 +589,148 @@ def cmd_status(args: argparse.Namespace) -> int:
     """Krótki status: chunki, publikacje, ostatnia indeksacja."""
     setup_environment()
     cfg = load_config()
+    from siwz_rag.bootstrap import ensure_runtime_ready
     from siwz_rag.sync.manager import SyncManager
 
+    # Bootstrap (best-effort — status powinien pokazywać też brak Qdrantu)
+    bootstrap_ok, bootstrap_msg, cfg = ensure_runtime_ready(cfg, verbose=False)
+    if not bootstrap_ok:
+        _warn(f"Runtime nie jest gotowy: {bootstrap_msg}")
+        _info("Status indexu może być niedostępny.")
+
     mgr = SyncManager(cfg)
-    s = mgr.status_summary()
-    _info(f"Chunki w Qdrant:        {s['chunks_in_qdrant']}")
-    _info(f"Publikacji w state:     {s['publications_in_state']}")
-    _info(f"Plików HTML na dysku:   {s['html_files_on_disk']}")
-    _info(f"Ostatnia indeksacja:    {s['last_indexed_at'] or '(nigdy)'}")
+    try:
+        s = mgr.status_summary()
+        _info(f"Chunki w Qdrant:        {s['chunks_in_qdrant']}")
+        _info(f"Publikacji w state:     {s['publications_in_state']}")
+        _info(f"Plików HTML na dysku:   {s['html_files_on_disk']}")
+        _info(f"Ostatnia indeksacja:    {s['last_indexed_at'] or '(nigdy)'}")
+        days = s.get("days_since_last_sync")
+        if days is not None:
+            _info(f"Dni od ostatniej sync:  {days:.1f}")
+    except Exception as exc:  # noqa: BLE001
+        _err(f"Nie udało się odczytać statusu: {exc}")
+        return 1
     return 0
+
+
+# ── qdrant (zarządzanie kontenerem) ─────────────────────────────────────────
+
+
+def cmd_qdrant(args: argparse.Namespace) -> int:
+    """Zarządzaj kontenerem Qdrant: start/stop/restart/status/logs/dashboard."""
+    setup_environment()
+    cfg = load_config()
+
+    if cfg.vectorstore.mode != "docker":
+        _err(
+            f"Komenda 'qdrant' obsługuje tylko mode=docker (aktualny: {cfg.vectorstore.mode})"
+        )
+        return 1
+
+    from siwz_rag.qdrant_runtime import (
+        container_status,
+        ensure_running,
+        remove_container,
+        start_container,
+        stop_container,
+    )
+
+    name = cfg.vectorstore.docker_container
+
+    if args.action == "start":
+        ok, msg = ensure_running(
+            name=name,
+            volume=cfg.vectorstore.docker_volume,
+            image=cfg.vectorstore.docker_image,
+            port=cfg.vectorstore.port,
+        )
+        (_ok if ok else _err)(msg)
+        return 0 if ok else 1
+
+    if args.action == "stop":
+        ok, msg = stop_container(name)
+        (_ok if ok else _err)(msg)
+        return 0 if ok else 1
+
+    if args.action == "restart":
+        stop_container(name)
+        ok, msg = ensure_running(
+            name=name,
+            volume=cfg.vectorstore.docker_volume,
+            image=cfg.vectorstore.docker_image,
+            port=cfg.vectorstore.port,
+        )
+        (_ok if ok else _err)(msg)
+        return 0 if ok else 1
+
+    if args.action == "status":
+        cs = container_status(name)
+        _info(f"Kontener:        {cs.name}")
+        _info(f"Istnieje:        {cs.exists}")
+        _info(f"Działa:          {cs.running}")
+        _info(f"Health OK:       {cs.health_ok}")
+        _info(f"Port:            {cs.port}")
+        if cs.image:
+            _info(f"Obraz:           {cs.image}")
+        if cs.running and cs.health_ok:
+            _ok(f"Dashboard:       http://localhost:{cs.port}/dashboard")
+        return 0
+
+    if args.action == "logs":
+        try:
+            return subprocess.call(["docker", "logs", "-f", "--tail", "100", name])
+        except KeyboardInterrupt:
+            return 0
+
+    if args.action == "dashboard":
+        cs = container_status(name)
+        if not cs.running:
+            _err(f"Kontener {name} nie działa. Najpierw: siwz-rag qdrant start")
+            return 1
+        url = f"http://localhost:{cs.port}/dashboard"
+        _ok(f"Otwórz w przeglądarce: {url}")
+        try:
+            import webbrowser
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
+
+    if args.action == "cleanup":
+        # Manual cleanup: usuń wszystkie kontenery Qdrant (poza naszym) na naszym porcie
+        from siwz_rag.qdrant_runtime import (
+            cleanup_orphan_qdrant_containers,
+            diagnose_port_conflict,
+            find_qdrant_containers_on_port,
+            is_port_free,
+        )
+
+        port = cfg.vectorstore.port
+        _info(f"Sprawdzam port {port}…")
+
+        # Najpierw status
+        if is_port_free(port):
+            _ok(f"Port {port} jest wolny — nic do sprzątania")
+            # Mimo to pokaż wszystkie Qdrant kontenery (mogły zostać po failed run)
+            orphans = find_qdrant_containers_on_port(port)
+            if orphans:
+                _info(f"Znalezione kontenery Qdrant na porcie {port}:")
+                for o in orphans:
+                    _info(f"  • {o['name']} ({o['image']}, state={o['state']})")
+            return 0
+
+        _warn(f"Port {port} zajęty")
+        _info(diagnose_port_conflict(port))
+
+        ok, msg = cleanup_orphan_qdrant_containers(name, port)
+        if ok:
+            _ok(msg)
+        else:
+            _err(msg)
+        return 0 if ok else 1
+
+    return 2
 
 
 # ── serve ───────────────────────────────────────────────────────────────────
@@ -375,10 +739,22 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_serve(args: argparse.Namespace) -> int:
     """Uruchom UI Streamlit (alias `streamlit run app.py`)."""
     setup_environment()
+    cfg = load_config()
     app_path = BASE_DIR / "app.py"
     if not app_path.exists():
         _err(f"Brak pliku UI: {app_path}")
         return 1
+
+    # Bootstrap Qdrant PRZED uruchomieniem UI — żeby Streamlit nie startował
+    # i potem nie crashował od razu przy pierwszym query.
+    from siwz_rag.bootstrap import ensure_runtime_ready
+
+    ok, msg, cfg = ensure_runtime_ready(cfg)
+    if not ok:
+        _err(msg)
+        _info("UI mimo to się uruchomi — możesz naprawić Docker i odświeżyć stronę.")
+    else:
+        _ok(msg)
 
     cmd = [
         sys.executable, "-m", "streamlit", "run", str(app_path),
@@ -404,7 +780,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init", help="Inicjalizuj katalogi data/, models/, logs/.")
-    sub.add_parser("doctor", help="Health-check środowiska, Ollama, modeli, indexu.")
+
+    sp_doctor = sub.add_parser("doctor", help="Health-check środowiska, Ollama, modeli, indexu.")
+    sp_doctor.add_argument(
+        "--fix",
+        action="store_true",
+        help="Automatycznie napraw co się da (docker pull, docker run, itd.)",
+    )
+
     sub.add_parser("status", help="Krótki status indexu i stanu sync.")
 
     sp_sync = sub.add_parser("sync", help="Pobierz dokumentację z portalu + auto-reindex.")
@@ -412,12 +795,43 @@ def build_parser() -> argparse.ArgumentParser:
     sp_sync.add_argument("--dry-run", action="store_true", help="Pokaż co byłoby pobrane, bez fetchowania.")
     sp_sync.add_argument("--max", type=int, default=None, help="Limit liczby publikacji (do testów).")
     sp_sync.add_argument("--skip-reindex", action="store_true", help="Tylko sync HTML, bez aktualizacji Qdrant.")
+    sp_sync.add_argument(
+        "--rate-limit", type=float, default=None,
+        help="Nadpisz rate_limit_rps z configu (req/s). Domyślnie z config.yaml.",
+    )
 
     sub.add_parser("index", help="Pełen reindex z lokalnych HTML (bez sieci).")
+
+    sp_import = sub.add_parser(
+        "import",
+        help="Zaimportuj lokalny katalog HTML z cortex-docs-sync (zamiast pobierać z portalu).",
+    )
+    sp_import.add_argument(
+        "--source", "-s",
+        type=str, default=None,
+        help="Ścieżka do katalogu z cortex_docs/{xdr,xsiam,...}/*.html. Pomiń = auto-detect.",
+    )
+    sp_import.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Bez interaktywnego potwierdzenia.",
+    )
+    sp_import.add_argument(
+        "--no-reindex",
+        action="store_true",
+        help="Tylko skopiuj pliki + zrekonstruuj state, bez indeksowania w Qdrant.",
+    )
 
     sp_serve = sub.add_parser("serve", help="Uruchom UI Streamlit.")
     sp_serve.add_argument("--port", type=int, default=8501)
     sp_serve.add_argument("--host", type=str, default="localhost")
+
+    sp_qdrant = sub.add_parser("qdrant", help="Zarządzaj kontenerem Qdrant (start/stop/status/logs/cleanup).")
+    sp_qdrant.add_argument(
+        "action",
+        choices=["start", "stop", "restart", "status", "logs", "dashboard", "cleanup"],
+        help="Akcja na kontenerze Qdrant",
+    )
 
     return p
 
@@ -430,7 +844,9 @@ _COMMANDS = {
     "doctor": cmd_doctor,
     "sync": cmd_sync,
     "index": cmd_index,
+    "import": cmd_import,
     "status": cmd_status,
+    "qdrant": cmd_qdrant,
     "serve": cmd_serve,
 }
 

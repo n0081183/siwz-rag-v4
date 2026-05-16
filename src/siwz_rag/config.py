@@ -109,12 +109,16 @@ class SearchConfig:
 @dataclass(frozen=True)
 class VectorStoreConfig:
     provider: str
-    mode: str
+    mode: str  # docker | http | embedded
     storage_path: str
     host: str
     port: int
     collection: str
     search: SearchConfig
+    # Pola dla mode=docker (auto-spawn)
+    docker_container: str = "siwz-rag-qdrant"
+    docker_volume: str = "siwz-rag-qdrant-storage"
+    docker_image: str = "qdrant/qdrant:v1.12.1"
 
     @property
     def storage_path_abs(self) -> Path:
@@ -245,11 +249,14 @@ def load_config(path: Path | None = None) -> Config:
         ),
         vectorstore=VectorStoreConfig(
             provider=raw["vectorstore"].get("provider", "qdrant"),
-            mode=raw["vectorstore"].get("mode", "embedded"),
+            mode=raw["vectorstore"].get("mode", "docker"),
             storage_path=raw["vectorstore"].get("storage_path", "data/qdrant"),
             host=raw["vectorstore"].get("host", "localhost"),
             port=int(raw["vectorstore"].get("port", 6333)),
             collection=raw["vectorstore"].get("collection", "cortex_docs_v4"),
+            docker_container=raw["vectorstore"].get("docker_container", "siwz-rag-qdrant"),
+            docker_volume=raw["vectorstore"].get("docker_volume", "siwz-rag-qdrant-storage"),
+            docker_image=raw["vectorstore"].get("docker_image", "qdrant/qdrant:v1.12.1"),
             search=SearchConfig(
                 fusion=raw["vectorstore"].get("search", {}).get("fusion", "rrf"),
                 prefetch_limit=int(raw["vectorstore"].get("search", {}).get("prefetch_limit", 40)),

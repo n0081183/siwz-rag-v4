@@ -1,16 +1,30 @@
-"""Qdrant wrapper — hybrid (dense + sparse) search z RRF, embedded mode.
+"""Qdrant wrapper — hybrid (dense + sparse) search z RRF.
+
+Wspierane tryby (cfg.vectorstore.mode):
+  - docker   → auto-spawn kontenera (DOMYŚLNY w v4)
+  - http     → manualny serwer (np. cluster, cloud) pod cfg.host:cfg.port
+  - embedded → qdrant_client z lokalnym SQLite (ostatni fallback, limit ~20k pts)
+
+Dlaczego nie tylko embedded?
+  Qdrant Local Mode jest oficjalnie zaprojektowany do <20k punktów. Po przekroczeniu:
+    - Payload indexes NIE działają (linear scan przy filtrach)
+    - Brak snapshotów
+    - Wydajność spada drastycznie
+
+  Korpus Cortex to 50k+ chunków. Server mode (Docker) eliminuje te wszystkie problemy
+  i dodaje WebUI pod http://localhost:6333/dashboard.
 
 v4 vs v3:
-  - Domyślnie EMBEDDED mode: bez Dockera, dane w `data/qdrant/`.
-  - Filtr produktów używa MatchAny + sensowna logika "wszystkie produkty zaznaczone
-    = brak filtra" (oszczędza Qdrantowi pracy).
-  - Metoda `delete_by_map_id()` do reindexu konkretnej publikacji bez recreate całej kolekcji.
+  - Domyślnie DOCKER (z auto-spawn) zamiast embedded.
+  - Metoda `delete_by_map_id()` do reindexu konkretnej publikacji.
   - Metoda `count_points()` + `last_indexed_at()` do UI status panel.
+  - Filtr produktów używa MatchAny + logika "wszystkie zaznaczone = brak filtra".
 """
 
 from __future__ import annotations
 
 import logging
+import warnings
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -38,19 +52,45 @@ logger = logging.getLogger(__name__)
 
 
 class VectorStore:
-    """Wrapper na Qdrant z hybrid search (dense+sparse, RRF)."""
+    """Wrapper na Qdrant z hybrid search (dense+sparse, RRF).
+
+    Tryb decyduje o sposobie połączenia:
+      - docker / http → QdrantClient(host, port) — wszystkie features działają
+      - embedded      → QdrantClient(path=...)   — limit ~20k pts, brak payload indexes
+    """
 
     def __init__(self, cfg: VectorStoreConfig) -> None:
         self._cfg = cfg
         self._client: QdrantClient | None = None
+        self._embedded_warned = False
 
     @property
     def client(self) -> QdrantClient:
         if self._client is None:
-            if self._cfg.mode == "embedded":
+            mode = (self._cfg.mode or "docker").lower()
+            if mode == "embedded":
+                if not self._embedded_warned:
+                    logger.warning(
+                        "Qdrant w trybie EMBEDDED — limit ~20k punktów, payload indexes nie działają. "
+                        "Dla pełnej dokumentacji Cortex użyj mode='docker' w config.yaml."
+                    )
+                    self._embedded_warned = True
+                # Suppress noisy payload-index warnings z qdrant_client
+                # (i tak je wyłapaliśmy log-iem powyżej, a w embedded NIE MA payload index
+                # — to świadoma decyzja userska)
+                warnings.filterwarnings(
+                    "ignore",
+                    message=".*payload indexes.*",
+                    category=UserWarning,
+                )
                 self._client = QdrantClient(path=str(self._cfg.storage_path_abs))
             else:
-                self._client = QdrantClient(host=self._cfg.host, port=self._cfg.port)
+                # docker / http — to samo połączenie, różnica tylko w tym kto kontener startuje
+                self._client = QdrantClient(
+                    host=self._cfg.host,
+                    port=self._cfg.port,
+                    prefer_grpc=False,  # REST jest bardziej tolerancyjny na localhost
+                )
         return self._client
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
@@ -73,7 +113,8 @@ class VectorStore:
             vectors_config={"dense": VectorParams(size=dim, distance=Distance.COSINE, on_disk=True)},
             sparse_vectors_config=sparse_config,
         )
-        # Indexy payload — przyspieszają filtrowanie
+        # Indexy payload — przyspieszają filtrowanie.
+        # W trybie embedded są no-opem (warning suppressed), w docker/http działają w pełni.
         try:
             self.client.create_payload_index(
                 collection_name=self._cfg.collection,

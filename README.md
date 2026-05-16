@@ -134,17 +134,62 @@ Pobiera najnowszą wersję dokumentacji z portalu Palo Alto. Wykrywa, co się zm
 
 ```
 siwz-rag init       # zainicjalizuj katalogi i przykładowy config
-siwz-rag doctor     # health-check środowiska
+siwz-rag doctor     # health-check środowiska + status Docker/Qdrant
+   --fix                 # automatycznie napraw (docker pull, docker run, itd.)
 siwz-rag status     # ile chunków w Qdrant, ile publikacji w state
 siwz-rag sync       # pobierz dokumentację + auto-reindex (incremental)
    --full                # pobierz wszystko od nowa (długo!)
    --dry-run             # tylko pokaż co byłoby pobrane
    --max N               # limit publikacji (do testów)
    --skip-reindex        # pobierz HTML ale nie aktualizuj Qdrant
+   --rate-limit N        # nadpisz req/s (default 5.0)
 siwz-rag index      # pełen reindex z lokalnych HTML (bez sieci)
-siwz-rag serve      # uruchom Streamlit UI
+siwz-rag import     # zaimportuj lokalny katalog HTML z cortex-docs-sync
+   --source PATH         # ścieżka do cortex_docs/ (auto-detect jeśli brak)
+   --yes                 # bez potwierdzenia
+   --no-reindex          # tylko skopiuj pliki, bez indeksowania Qdrant
+siwz-rag qdrant     # zarządzanie kontenerem Qdrant
+   start                 # uruchom kontener (idempotentne)
+   stop                  # zatrzymaj
+   restart               # restart
+   status                # stan kontenera
+   logs                  # podgląd logów (follow)
+   dashboard             # otwórz WebUI w przeglądarce
+siwz-rag serve      # uruchom Streamlit UI (auto-start Qdrant)
    --port 8501           # zmień port
 ```
+
+### 🧠 Vector store: Qdrant w Dockerze (domyślnie)
+
+v4 używa **Qdrant w Dockerze** zamiast lokalnego embedded mode. Powód: Qdrant local mode jest oficjalnie zaprojektowany do <20k punktów, a korpus Cortex to 50k+ chunków. Server mode daje:
+
+- ✅ Pełne **payload indexes** (przyspieszone filtry po `product`, `map_id`)
+- ✅ **Snapshoty / backupy**
+- ✅ Skala do milionów punktów
+- ✅ **WebUI** pod `http://localhost:6333/dashboard`
+
+Aplikacja sama:
+1. Sprawdza czy Docker działa (Docker Desktop, OrbStack, colima — wszystko działa)
+2. Pobiera obraz `qdrant/qdrant:v1.12.1` (~100 MB) przy pierwszym uruchomieniu
+3. Tworzy kontener `siwz-rag-qdrant` z wolumenem `siwz-rag-qdrant-storage`
+4. Czeka na health-check
+5. Wszystko PRZED zaczęciem indeksowania
+
+Jeśli nie chcesz Dockera, ustaw `mode: embedded` w `config/config.yaml` (limit ~20k punktów) lub `mode: http` i podłącz do zewnętrznego Qdrant.
+
+### 🚀 Przyspieszony pierwszy start (jeśli masz już dokumentację)
+
+Jeśli na dysku masz już output z `cortex-docs-sync` (z innego projektu), pomiń 1-2 godziny pobierania:
+
+```bash
+# Auto-detect (sprawdza ~/cortex-docs-sync/, ~/Documents/, ~/Downloads/ itd.)
+siwz-rag import
+
+# Lub jawnie:
+siwz-rag import --source "/Users/marcin/Dev Temp/cortex-docs-sync/cortex_docs"
+```
+
+`import` skopiuje pliki HTML do `data/cortex_docs/`, zrekonstruuje state-file (kolejny `siwz-rag sync` będzie incremental — pobierze tylko zmienione publikacje), i zindexuje całość w Qdrant (~10-30 min vs ~2h pobierania).
 
 Wszystkie komendy logują do `data/logs/` (z rotacją).
 
@@ -228,6 +273,8 @@ siwz-rag status     # how many chunks in Qdrant, publications in state
 siwz-rag sync       # pull docs + auto-reindex (incremental)
    --full, --dry-run, --max N, --skip-reindex
 siwz-rag index      # full reindex from local HTML
+siwz-rag import     # import local cortex-docs-sync output (skip portal download)
+   --source PATH, --yes, --no-reindex
 siwz-rag serve      # run Streamlit UI
 ```
 
